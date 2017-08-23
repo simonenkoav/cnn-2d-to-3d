@@ -4,21 +4,30 @@ import random
 import copy
 import math
 import matplotlib.pyplot as plt
-from enum import Enum
+from enum import IntEnum
 
 focal_length = 2.41421356
 
-train_size = 10  # count of deviations for one position
 image_side = 20
 
-array_form = (train_size, image_side, image_side)
-train_data = np.zeros(array_form)
+count_of_object_points = 4
 
-image_form = (image_side, image_side)
-empty_image_array = np.zeros(image_form)
+angle_step = 20  # we woukd take angles in the range 0-360° with the shep=angle_step
+
+# square placed in the center of image without rotations
+perfect_coordinates = np.array([[4, 14, 0], [4, 4, 0], [14, 4, 0], [14, 14, 0]])  # coordinates of 4 points
+
+count_of_deformations = 10  # count of deviations for one position
+
+# counts are counts of rotation angles about each axis
+x_count = y_count = 360 / angle_step - 1
+z_count = 360 / angle_step
+count_of_train_data = int(count_of_deformations * x_count * y_count * z_count)
+train_data = np.zeros((count_of_train_data, count_of_object_points, 2))
+train_labels = np.zeros((count_of_train_data, count_of_object_points, 3))
 
 
-class Axes(Enum):
+class Axes(IntEnum):
     X = 0
     Y = 1
     Z = 2
@@ -35,18 +44,10 @@ def add_deviation(coordinate):
 def add_deviations(coordinates):
     new_coordinates = copy.deepcopy(coordinates)
     for point in new_coordinates:
-        for coordinate in point:
-            coordinate_index = point.index(coordinate)
-            point[coordinate_index] = add_deviation(coordinate)
+        for i in range(len(point) - 1):  # len(point) - 1 because we don't take into account z coordinates
+            point[i] = add_deviation(point[i])
 
     return new_coordinates
-
-
-def set_points_on_image(image_array, points_coordinates):
-    image_array_with_points = copy.deepcopy(image_array)
-    for point in points_coordinates:
-        image_array_with_points[point[0], point[1]] = 1
-    return image_array_with_points
 
 
 def get_sin_cos(degrees):
@@ -88,16 +89,27 @@ def add_transpose(R):
     return RT
 
 
-def make_rt_matrix(axis, degrees):
+def choose_rotation_matrix(axis, degrees):
     if axis == Axes.X:
-        R = make_rotation_matrix_about_x_axis(degrees)
-        return add_transpose(R)
+        return make_rotation_matrix_about_x_axis(degrees)
     elif axis == Axes.Y:
-        R = make_rotation_matrix_about_y_axis(degrees)
-        return add_transpose(R)
+        return make_rotation_matrix_about_y_axis(degrees)
     elif axis == Axes.Z:
-        R = make_rotation_matrix_about_z_axis(degrees)
-        return add_transpose(R)
+        return make_rotation_matrix_about_z_axis(degrees)
+
+
+# axes__to_degrees is the dictionary of three axes and corresponding degrees
+def make_rt_matrix(axes__to_degrees):
+    assert len(axes__to_degrees) == len(Axes)
+
+    R_x = make_rotation_matrix_about_x_axis(axes__to_degrees[Axes.X])
+    R_y = make_rotation_matrix_about_y_axis(axes__to_degrees[Axes.Y])
+    R_z = make_rotation_matrix_about_z_axis(axes__to_degrees[Axes.Z])
+
+    R = np.dot(R_z, R_y)
+    R = np.dot(R, R_x)
+
+    return add_transpose(R)
 
 
 # coordinates should be passed in form [[point0_x, point0_y, point0_z], [point1_x, point1_y, point1_z], ...]
@@ -111,70 +123,100 @@ def transform_to_homogeneous(coordinates):
     return new_coordinates
 
 
-def generate_rotation_matrices():
-    rotations = np.zeros((int(360 / 20), 3, 3))  # shape is (count of rotation matrices, size of single rotation matrix)
-    i = 0
-    index = 0
-    while i < 360:
-        rotations[index] = make_rotation_matrix_about_z_axis(i)
-        index += 1
-        i += 20
-    return rotations
+def generate_rotation_angles():
+    x_count = y_count = int(360 / angle_step - 1)
+    z_count = int(360 / angle_step)
+    xy_angles = list(range(0, 360, angle_step))
+    xy_angles.remove(180)
+    z_angles = list(range(0, 360, angle_step))
+    count = x_count * y_count * z_count
+    angles = np.zeros((count, 3))
+    for i_z in range(z_count):
+        for i_y in range(y_count):
+            for i_x in range(x_count):
+                index = i_x + x_count * i_y + x_count * y_count * i_z
+                angles[index] = [xy_angles[i_x], xy_angles[i_y], z_angles[i_z]]
+
+    return angles
 
 
 def get_projection(point):
-    x = (focal_length / point[-1]) * point[0]
-    y = (focal_length / point[-1]) * point[1]
+    x = point[0]
+    y = point[1]
+    if point[-1] != 0:
+        x = (focal_length / point[-1]) * x
+        y = (focal_length / point[-1]) * y
     return x, y
 
 
 def get_normal_coordinates(in_vector_coordinates):
-    new_coordinates = copy.deepcopy(in_vector_coordinates)
+    new_coordinates = np.array(copy.deepcopy(in_vector_coordinates), dtype='float32')
     for point in new_coordinates:
         point0 = point[0]
         point1 = point[1]
-        point[0] = (point1 - 9) / 5
-        point[1] = (9 - point0) / 5
+        point[0] = (point1 - 9.0) / 5.0
+        point[1] = (9.0 - point0) / 5.0
+    return new_coordinates
 
-    return np.array(new_coordinates)
 
-
-def get_2d(all_cordinates):
-    coordinates_2d = np.array(all_cordinates[:-1, :]).transpose()
+def get_2d(all_coordinates):
+    coordinates_2d = np.array(all_coordinates[:-1, :]).transpose()
     return coordinates_2d
 
 
-# square place in the center of image without rotations
-perfect_coordinates = [[4, 14, 0], [4, 4, 0], [14, 4, 0], [14, 14, 0]]  # coordinates of 4 points
+def get_3d(homogeneous_coordinates):
+    new_coordinates = np.array(homogeneous_coordinates[:, :-1])
+    return new_coordinates
 
 
-for i in range(train_size):
-    new_coordinates = add_deviations(perfect_coordinates)
-    image_with_points = set_points_on_image(empty_image_array, new_coordinates)
-    train_data[i] = image_with_points
+def save_data(xy, label_3d_points, index):
+    train_data[index] = xy
+    train_labels[index] = label_3d_points
 
 
-perfect_coordinates = [[4, 14, 0], [4, 4, 0], [14, 4, 0], [14, 14, 0]]  # coordinates of 4 points
+def save_to_file():
+    with open(str("TRAIN_DATA") + '.pkl', 'wb') as f:
+        pickle.dump(train_data, f, pickle.HIGHEST_PROTOCOL)
 
-# TODO rotate in cycle: in range 0°-360° with step of 20 for all 3 axes -> 58320 (10*18*18*18) correct images of square
+    with open(str("TRAIN_LABELS") + '.pkl', 'wb') as f:
+        pickle.dump(train_labels, f, pickle.HIGHEST_PROTOCOL)
 
 
-RT = make_rt_matrix(Axes.X, 45)
-print("RT = " + str(RT))
-normal_coordinates = get_normal_coordinates(perfect_coordinates)
-print("normal_coordinates = " + str(normal_coordinates))
-normal_coordinates = transform_to_homogeneous(normal_coordinates)
-normal_coordinates = np.transpose(normal_coordinates)
-print("normal_coordinates (homogeneous) = " + str(normal_coordinates))
-rotated = np.dot(RT, normal_coordinates)
-rotated = np.transpose(rotated)
-rotated = np.array(rotated)  # if i won't do it, when iterating each element would be presented in the form [[1 2 3]]
-# i don't know why this shit happens
+# shape -- (count of deformations, count of object points, count of coordinates of each point -- x, y, z, 1 --
+# because homogeneous)
+deformed = np.zeros((count_of_deformations, count_of_object_points, 3 + 1))
 
-print("rotated = " + str(rotated))
+for i in range(count_of_deformations):
+    deformed_coordinates = add_deviations(perfect_coordinates)
+    normal_coordinates = get_normal_coordinates(deformed_coordinates)
+    normal_coordinates = transform_to_homogeneous(normal_coordinates)
+    deformed[i] = normal_coordinates
 
-for point in rotated:
-    point[0], point[1] = get_projection(point)
+angles_list = generate_rotation_angles()
 
-print("rotated (projections) = " + str(rotated))
-print("2d = " + str(get_2d(np.transpose(rotated))))
+for i_coordinates in range(len(deformed)):
+    coordinates = deformed[i_coordinates]
+    for i_angles in range(len(angles_list)):
+        angles = angles_list[i_angles]
+        RT = make_rt_matrix({Axes.X: angles[Axes.X],
+                             Axes.Y: angles[Axes.Y],
+                             Axes.Z: angles[Axes.Z]})
+        rotated = np.dot(RT, coordinates)
+        rotated = np.transpose(rotated)
+        # if i won't do the shit on the next line,
+        # it would be presented in the form [[1 2 3]] when iterating each element.
+        # i don't know why this shit happens
+        rotated = np.array(rotated)
+
+        for point in rotated:
+            point[0], point[1] = get_projection(point)
+
+        only_xy = get_2d(np.transpose(rotated))
+        only_xyz = get_3d(coordinates)
+
+        index_of_train_data = i_coordinates * len(angles_list) + i_angles
+        save_data(only_xy, only_xyz, index_of_train_data)
+
+save_to_file()
+
+
