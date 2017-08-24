@@ -1,9 +1,7 @@
-import pickle
+import utils.file_utils as file_utils
 import numpy as np
 import random
 import copy
-import math
-import matplotlib.pyplot as plt
 from enum import IntEnum
 
 focal_length = 2.41421356
@@ -25,6 +23,9 @@ z_count = 360 / angle_step
 count_of_train_data = int(count_of_deformations * x_count * y_count * z_count)
 train_data = np.zeros((count_of_train_data, count_of_object_points, 2))
 train_labels = np.zeros((count_of_train_data, count_of_object_points, 3))
+
+data_filename = "TRAIN_DATA"
+labels_filename = "TRAIN_LABELS"
 
 
 class Axes(IntEnum):
@@ -174,49 +175,42 @@ def save_data(xy, label_3d_points, index):
     train_labels[index] = label_3d_points
 
 
-def save_to_file():
-    with open(str("TRAIN_DATA") + '.pkl', 'wb') as f:
-        pickle.dump(train_data, f, pickle.HIGHEST_PROTOCOL)
+if __name__ == "__main__":
+    # shape -- (count of deformations, count of object points, count of coordinates of each point -- x, y, z, 1 --
+    # because homogeneous)
+    deformed = np.zeros((count_of_deformations, count_of_object_points, 3 + 1))
 
-    with open(str("TRAIN_LABELS") + '.pkl', 'wb') as f:
-        pickle.dump(train_labels, f, pickle.HIGHEST_PROTOCOL)
+    for i in range(count_of_deformations):
+        deformed_coordinates = add_deviations(perfect_coordinates)
+        normal_coordinates = get_normal_coordinates(deformed_coordinates)
+        normal_coordinates = transform_to_homogeneous(normal_coordinates)
+        deformed[i] = normal_coordinates
 
+    angles_list = generate_rotation_angles()
 
-# shape -- (count of deformations, count of object points, count of coordinates of each point -- x, y, z, 1 --
-# because homogeneous)
-deformed = np.zeros((count_of_deformations, count_of_object_points, 3 + 1))
+    for i_coordinates in range(len(deformed)):
+        coordinates = deformed[i_coordinates]
+        for i_angles in range(len(angles_list)):
+            angles = angles_list[i_angles]
+            RT = make_rt_matrix({Axes.X: angles[Axes.X],
+                                 Axes.Y: angles[Axes.Y],
+                                 Axes.Z: angles[Axes.Z]})
+            rotated = np.dot(RT, coordinates)
+            rotated = np.transpose(rotated)
+            # if i won't do the shit on the next line,
+            # it would be presented in the form [[1 2 3]] when iterating each element.
+            # i don't know why this shit happens
+            rotated = np.array(rotated)
 
-for i in range(count_of_deformations):
-    deformed_coordinates = add_deviations(perfect_coordinates)
-    normal_coordinates = get_normal_coordinates(deformed_coordinates)
-    normal_coordinates = transform_to_homogeneous(normal_coordinates)
-    deformed[i] = normal_coordinates
+            for point in rotated:
+                point[0], point[1] = get_projection(point)
 
-angles_list = generate_rotation_angles()
+            only_xy = get_2d(np.transpose(rotated))
+            only_xyz = get_3d(coordinates)
 
-for i_coordinates in range(len(deformed)):
-    coordinates = deformed[i_coordinates]
-    for i_angles in range(len(angles_list)):
-        angles = angles_list[i_angles]
-        RT = make_rt_matrix({Axes.X: angles[Axes.X],
-                             Axes.Y: angles[Axes.Y],
-                             Axes.Z: angles[Axes.Z]})
-        rotated = np.dot(RT, coordinates)
-        rotated = np.transpose(rotated)
-        # if i won't do the shit on the next line,
-        # it would be presented in the form [[1 2 3]] when iterating each element.
-        # i don't know why this shit happens
-        rotated = np.array(rotated)
+            index_of_train_data = i_coordinates * len(angles_list) + i_angles
+            save_data(only_xy, only_xyz, index_of_train_data)
 
-        for point in rotated:
-            point[0], point[1] = get_projection(point)
-
-        only_xy = get_2d(np.transpose(rotated))
-        only_xyz = get_3d(coordinates)
-
-        index_of_train_data = i_coordinates * len(angles_list) + i_angles
-        save_data(only_xy, only_xyz, index_of_train_data)
-
-save_to_file()
+    file_utils.save_data_to_file(train_data, train_labels, data_filename, labels_filename)
 
 
